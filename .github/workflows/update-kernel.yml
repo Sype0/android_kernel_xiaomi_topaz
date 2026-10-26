@@ -1,0 +1,78 @@
+name: Update GKI kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      gki_release:
+        description: Release tag in Sype0/gki-kernel-tapas to take the kernel and GKI modules from
+        default: gki-5.15.211-20261026-3
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the release
+        working-directory: /tmp
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir gki && cd gki
+          gh release download "${{ inputs.gki_release }}" -R Sype0/gki-kernel-tapas -p Image -p system_dlkm.img -p SHA256SUMS
+          grep -E "  (Image|system_dlkm.img)$" SHA256SUMS | sha256sum -c
+
+      - name: Extract the GKI modules
+        working-directory: /tmp/gki
+        run: |
+          release=$(strings -a Image | sed -n 's/^Linux version \([0-9][^ ]*\) .*/\1/p' | head -1)
+          [ -n "$release" ] || { echo "::error::No kernel release string in Image"; exit 1; }
+          debugfs -R "rdump /lib/modules/$release /tmp/gki" system_dlkm.img
+          for m in kernel/drivers/block/zram/zram.ko kernel/mm/zsmalloc.ko; do
+            f=$release/$m
+            strings -a "$f" | grep -q "^vermagic=$release " || { echo "::error::$m is not built for $release"; exit 1; }
+            tail -c 28 "$f" | grep -q "~Module signature appended~" || { echo "::error::$m is not signed"; exit 1; }
+          done
+          echo "RELEASE=$release" >> "$GITHUB_ENV"
+
+      - name: Replace the kernel and GKI modules
+        run: |
+          src=/tmp/gki/$RELEASE
+          cp /tmp/gki/Image kernel
+          cp "$src/kernel/drivers/block/zram/zram.ko" system_dlkm/zram.ko
+          cp "$src/kernel/mm/zsmalloc.ko" system_dlkm/zsmalloc.ko
+          # depmod output for the same two modules, generated for this kernel
+          for f in "$src"/modules.*; do
+            n=$(basename "$f")
+            if [ -e "system_dlkm/$n" ]; then cp "$f" "system_dlkm/$n"; else echo "Not in this repo, skipped: $n"; fi
+          done
+          git diff --stat
+          git diff -- system_dlkm/modules.load system_dlkm/modules.dep
+
+      - name: Commit and push
+        run: |
+          sha=$(sha256sum kernel | cut -d' ' -f1)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A kernel system_dlkm
+          git diff --cached --quiet && { echo "Already at ${{ inputs.gki_release }}"; exit 0; }
+          git commit -q -F - <<EOF
+          topaz-kernel: Update GKI kernel to ${RELEASE%%-*}
+
+          Kernel and system_dlkm modules (zram, zsmalloc) from
+          https://github.com/Sype0/gki-kernel-tapas/releases/tag/${{ inputs.gki_release }}
+          Kernel: $RELEASE
+          Image sha256: $sha
+
+          Google android13-5.15 GKI rebuilt from source; the corresponding source
+          is attached to that release.
+          EOF
+          git push
+          git log -1 --stat
