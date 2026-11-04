@@ -1,11 +1,40 @@
-//kernel_headers {
-//    name: "qti_kernel_headers",
-//    vendor_available: true,
-//    recovery_available: true,
-//}
+// AOSP has no vendor/lineage, which generates the kernel uapi headers from
+// TARGET_KERNEL_SOURCE (generated_kernel_headers and the defaults the CAF HALs
+// and hardware/qcom-caf/common build on). Export the prebuilt headers instead.
+// asm/signal.h and asm-generic/signal.h are bionic's cleaned copies, which is
+// what LineageOS's clean_headers.sh makes of them.
 
-kernel_headers {
-    name: "qti_display_kernel_headers",
+cc_library_headers {
+    name: "topaz_kernel_uapi_headers",
+    export_include_dirs: ["kernel-headers"],
     vendor_available: true,
     recovery_available: true,
+}
+
+cc_defaults {
+    name: "generated_kernel_header_defaults",
+    header_libs: ["topaz_kernel_uapi_headers"],
+    export_header_lib_headers: ["topaz_kernel_uapi_headers"],
+    vendor_available: true,
+    recovery_available: true,
+}
+
+cc_defaults {
+    name: "prebuilt_kernel_header_defaults",
+    defaults: ["generated_kernel_header_defaults"],
+}
+
+cc_library_headers {
+    name: "generated_kernel_headers",
+    defaults: ["generated_kernel_header_defaults"],
+}
+
+cc_library_headers {
+    name: "prebuilt_kernel_headers",
+    defaults: ["generated_kernel_header_defaults"],
+}
+
+cc_library_headers {
+    name: "qti_display_kernel_headers",
+    defaults: ["generated_kernel_header_defaults"],
 }
